@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Site Intel</title>
+<style>
+:root{--bg:#fafaf7;--fg:#1c1c1a;--muted:#6b6b66;--line:#e4e3dc;--card:#fff;--accent:#2f5d50;--bad:#b4462f}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#9c9b94;--line:#2c2c29;--card:#1c1c1a;--accent:#7fb8a4}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:860px;margin:0 auto;padding:36px 16px 80px}h1{margin:0;font-size:26px}h2{font-size:17px;margin:32px 0 10px}
+.muted{color:var(--muted);font-size:13px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap}input,select,button{font:inherit;padding:9px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
+input{flex:1;min-width:200px}button{background:var(--accent);color:#fff;border:0;cursor:pointer}button:disabled{opacity:.5}
+pre{white-space:pre-wrap;font-size:12px;color:var(--muted);margin:8px 0 0;max-height:220px;overflow:auto}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 4px;border-bottom:1px solid var(--line);font-size:14px}
+a{color:var(--accent)}.err{color:var(--bad)}.answer{white-space:pre-wrap}
+</style>
+</head>
+<body><main>
+<h1>Site Intel</h1>
+<p class="muted">Crawl → structured extraction → AnythingLLM (RAG) → Claude analysis → report · <span id="health">checking…</span> · <a href="/docs">API docs</a></p>
+
+<h2>1 · Analyze a website</h2>
+<div class="card">
+  <form id="runForm" class="row">
+    <input id="url" type="url" placeholder="https://vdigital.dev" required>
+    <input id="maxPages" type="number" min="1" max="500" value="25" style="flex:0 0 90px;min-width:0" title="max pages">
+    <button id="runBtn">Run pipeline</button>
+  </form>
+  <div id="job" class="muted"></div><pre id="jobLog" hidden></pre>
+</div>
+
+<h2>2 · Reports</h2>
+<div class="card"><table><thead><tr><th>Site</th><th>Pages</th><th>Avg score</th><th></th></tr></thead><tbody id="sites"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div>
+
+<h2>3 · Ask the site (RAG)</h2>
+<div class="card">
+  <form id="askForm" class="row">
+    <select id="askSite"></select>
+    <input id="question" placeholder="What services do they offer and how do I book a call?" required>
+    <button id="askBtn">Ask</button>
+  </form>
+  <div id="answer" class="answer" style="margin-top:12px"></div>
+</div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const api = async (path, opts = {}) => {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+};
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function loadHealth() {
+  try {
+    const h = await api("/health");
+    $("health").textContent = `AnythingLLM ${h.anythingllm ? "connected" : "NOT reachable"} · Claude key ${h.claude_key_set ? "set" : "missing"} · ${h.model}`;
+  } catch { $("health").textContent = "API not reachable"; }
+}
+
+async function loadSites() {
+  const sites = await api("/sites");
+  $("sites").innerHTML = sites.length
+    ? sites.map((s) => `<tr><td>${esc(s.site)}</td><td>${s.pages}</td><td>${s.avg_score}/10</td><td><a href="/sites/${encodeURIComponent(s.site)}/report.html" target="_blank">Open report</a> · <a href="/sites/${encodeURIComponent(s.site)}/report" target="_blank">JSON</a></td></tr>`).join("")
+    : `<tr><td colspan="4" class="muted">No reports yet. Run one above.</td></tr>`;
+  $("askSite").innerHTML = sites.map((s) => `<option>${esc(s.site)}</option>`).join("");
+}
+
+$("runForm").onsubmit = async (e) => {
+  e.preventDefault();
+  $("runBtn").disabled = true; $("jobLog").hidden = false; $("jobLog").textContent = "";
+  try {
+    let job = await api("/runs", { method: "POST", body: JSON.stringify({ url: $("url").value, max_pages: +$("maxPages").value }) });
+    while (["queued", "running"].includes(job.status)) {
+      $("job").textContent = `Job ${job.id.slice(0, 8)} · ${job.status}…`;
+      $("jobLog").textContent = job.log.join("\n");
+      $("jobLog").scrollTop = 1e9;
+      await new Promise((r) => setTimeout(r, 2000));
+      job = await api(`/runs/${job.id}`);
+    }
+    $("jobLog").textContent = job.log.join("\n");
+    $("job").innerHTML = job.status === "done"
+      ? `Done · <a href="/sites/${encodeURIComponent(job.site)}/report.html" target="_blank">open report</a>`
+      : `<span class="err">Failed: ${esc(job.error)}</span>`;
+    loadSites();
+  } catch (err) { $("job").innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+  $("runBtn").disabled = false;
+};
+
+$("askForm").onsubmit = async (e) => {
+  e.preventDefault();
+  $("askBtn").disabled = true; $("answer").textContent = "Thinking…";
+  try {
+    const a = await api(`/sites/${encodeURIComponent($("askSite").value)}/ask`, { method: "POST", body: JSON.stringify({ question: $("question").value }) });
+    $("answer").innerHTML = esc(a.answer) + `<div class="muted" style="margin-top:10px">` +
+      a.sources.map((s) => `[${s.n}] <a href="${esc(s.url)}" target="_blank">${esc(s.title || s.url)}</a>`).join("<br>") + "</div>";
+  } catch (err) { $("answer").innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+  $("askBtn").disabled = false;
+};
+
+loadHealth(); loadSites();
+</script>
+</body></html>

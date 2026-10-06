@@ -1,0 +1,8 @@
+# Sites processed by:  python -m app.cli run
+sites:
+  - url: https://vdigital.dev
+  - url: https://www.veljkopetkovic.com
+  - url: https://nocodebushido.dev
+  # Client work: ask the client before using their site in a public demo.
+  - url: https://bozinovicolgica.rs
+    enabled: false
